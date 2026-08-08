@@ -1,0 +1,47 @@
+{
+  "subscription_url": {
+    "description": "Clash 订阅地址（订阅配置会拉取并作为运行配置）。留空则使用内置默认配置（仅本地代理，无节点）。",
+    "type": "string",
+    "default": ""
+  },
+  "auto_start": {
+    "description": "是否在插件启动时自动下载并运行 mihomo",
+    "type": "boolean",
+    "default": true
+  },
+  "mixed_port": {
+    "description": "混合端口（HTTP+SOCKS5）。设为 0 则禁用 mixed-port，改用下面的 http_port 和 socks_port",
+    "type": "integer",
+    "default": 7890
+  },
+  "http_port": {
+    "description": "HTTP 代理端口（仅当 mixed_port=0 时生效）",
+    "type": "integer",
+    "default": 7890
+  },
+  "socks_port": {
+    "description": "SOCKS5 代理端口（仅当 mixed_port=0 时生效）",
+    "type": "integer",
+    "default": 7891
+  },
+  "api_port": {
+    "description": "RESTful 控制 API 端口",
+    "type": "integer",
+    "default": 9090
+  },
+  "api_secret": {
+    "description": "RESTful 控制 API 的 secret（可选）",
+    "type": "string",
+    "default": ""
+  },
+  "mihomo_version": {
+    "description": "要下载的 mihomo 版本标签（如 v1.18.10）",
+    "type": "string",
+    "default": "v1.18.10"
+  },
+  "subscription_refresh_minutes": {
+    "description": "订阅自动刷新间隔（分钟）。0 表示不自动刷新",
+    "type": "integer",
+    "default": 0
+  }
+}
