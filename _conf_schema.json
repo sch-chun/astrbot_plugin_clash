@@ -35,9 +35,9 @@
     "default": ""
   },
   "mihomo_version": {
-    "description": "要下载的 mihomo 版本标签（如 v1.18.10）",
+    "description": "要下载的 mihomo 版本标签（如 v1.19.29）。可去 https://github.com/MetaCubeX/mihomo/releases 查看。",
     "type": "string",
-    "default": "v1.18.10"
+    "default": "v1.19.29"
   },
   "subscription_refresh_minutes": {
     "description": "订阅自动刷新间隔（分钟）。0 表示不自动刷新",
