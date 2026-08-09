@@ -7,79 +7,78 @@ from typing import Optional
 
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
-from astrbot.api.star import Context, Star, register
+from astrbot.api.star import Context, Star
+
+try:
+    from astrbot.api.web import json_response, error_response, request
+except ImportError:
+    from quart import jsonify as json_response, Response as error_response, request
 
 from .src.clash_manager import ClashManager
 
+
 # 数据存放目录：插件目录下 data/
-DATA_DIR = Path(__file__).parent / "data"
+_PLUGIN_DATA_DIR = Path(__file__).parent / "data"
 
 
-@register(
-    "astrbot_plugin_clash",
-    "sch-chun",
-    "Clash (mihomo) 代理管理器，启动时自动安装并运行，结束时自动终止",
-    "0.1.0",
-    "https://github.com/sch-chun/astrbot_plugin_clash",
-)
 class ClashPlugin(Star):
     def __init__(self, context: Context, config=None) -> None:
         super().__init__(context)
         self.config = config
         self._manager: Optional[ClashManager] = None
         self._started = False
-        self._version = "v1.19.29"
 
-    def _read_config(self) -> dict:
-        cfg = self.config or {}
-        return {
-            "subscription_url": (cfg.get("subscription_url") or "").strip(),
-            "mixed_port": int(cfg.get("mixed_port", 7890)),
-            "http_port": int(cfg.get("http_port", 7890)),
-            "socks_port": int(cfg.get("socks_port", 7891)),
-            "api_port": int(cfg.get("api_port", 9090)),
-            "api_secret": (cfg.get("api_secret") or "").strip(),
-            "version": (cfg.get("mihomo_version") or "v1.19.29").strip(),
-            "auto_start": bool(cfg.get("auto_start", True)),
-            "refresh_minutes": int(cfg.get("subscription_refresh_minutes", 0)),
-        }
-
-    def _build_manager(self, cfg: dict) -> ClashManager:
-        manager = ClashManager(
-            bin_dir=DATA_DIR / "bin",
-            work_dir=DATA_DIR / "config",
-            http_port=cfg["http_port"],
-            socks_port=cfg["socks_port"],
-            api_port=cfg["api_port"],
-            api_secret=cfg["api_secret"],
-            mixed_port=cfg["mixed_port"],
-        )
-        if cfg["subscription_url"]:
-            manager.set_subscription(cfg["subscription_url"])
-        return manager
+        context.register_web_api("/clash/status", self.status_api, ["GET"], "获取运行状态和代理组")
+        context.register_web_api("/clash/proxies", self.proxies_api, ["GET"], "获取所有代理")
+        context.register_web_api("/clash/switch", self.switch_api, ["POST"], "切换节点")
+        context.register_web_api("/clash/delay", self.delay_api, ["GET"], "测试延迟")
 
     async def initialize(self) -> None:
         """插件启动：读取配置，下载/启动 Clash"""
         try:
-            cfg = self._read_config()
-            self._version = cfg["version"]
+            cfg = self.config or {}
+            subscription_url = (cfg.get("subscription_url") or "").strip()
+            mixed_port = int(cfg.get("mixed_port", 7890))
+            http_port = int(cfg.get("http_port", 7890))
+            socks_port = int(cfg.get("socks_port", 7891))
+            api_port = int(cfg.get("api_port", 9090))
+            api_secret = (cfg.get("api_secret") or "").strip()
+            version = (cfg.get("mihomo_version") or "v1.18.10").strip()
+            auto_start = True
+            subscription_refresh_minutes = int(cfg.get("subscription_refresh_minutes", 0))
 
-            if not cfg["auto_start"]:
+            if not auto_start:
                 logger.info("Clash 插件配置 auto_start=false，跳过启动")
                 return
 
-            self._manager = self._build_manager(cfg)
-            await self._manager.start(version=self._version)
+            bin_dir = _PLUGIN_DATA_DIR / "bin"
+            work_dir = _PLUGIN_DATA_DIR / "config"
+
+            self._manager = ClashManager(
+                bin_dir=bin_dir,
+                work_dir=work_dir,
+                http_port=http_port,
+                socks_port=socks_port,
+                api_port=api_port,
+                api_secret=api_secret,
+                mixed_port=mixed_port,
+            )
+
+            if subscription_url:
+                self._manager.set_subscription(subscription_url)
+
+            await self._manager.start(version=version)
             self._started = True
 
-            # 启用订阅自动刷新
-            if cfg["refresh_minutes"] > 0 and cfg["subscription_url"]:
-                asyncio.create_task(
-                    self._refresh_loop(cfg["refresh_minutes"] * 60)
-                )
-                logger.info(f"已启用订阅自动刷新，间隔 {cfg['refresh_minutes']} 分钟")
+            # 如果启用订阅自动刷新
+            if subscription_refresh_minutes > 0 and subscription_url:
+                asyncio.create_task(self._refresh_loop(subscription_refresh_minutes * 60))
+                logger.info(f"已启用订阅自动刷新，间隔 {subscription_refresh_minutes} 分钟")
 
-            logger.info(f"✅ Clash 已就绪 (pid={self._manager._process.pid if self._manager._process else '?'})")
+            logger.info(
+                f"✅ Clash 已就绪 (HTTP={http_port}, SOCKS={socks_port}, "
+                f"Mixed={mixed_port}, API={api_port})"
+            )
         except Exception as e:
             logger.error(f"❌ Clash 插件初始化失败: {e}", exc_info=True)
 
@@ -92,7 +91,7 @@ class ClashPlugin(Star):
                     return
                 try:
                     logger.info("订阅定时刷新开始")
-                    await self._manager.restart(version=self._version)
+                    await self._manager.restart()
                 except Exception as e:
                     logger.error(f"订阅刷新失败: {e}")
         except asyncio.CancelledError:
@@ -143,8 +142,7 @@ class ClashPlugin(Star):
 
         elif sub == "restart":
             try:
-                await self._manager.restart(version=self._version)
-                self._started = True
+                await self._manager.restart()
                 yield event.plain_result("✅ Clash 已重启")
             except Exception as e:
                 yield event.plain_result(f"❌ Clash 重启失败: {e}")
@@ -156,7 +154,9 @@ class ClashPlugin(Star):
 
         elif sub == "start":
             try:
-                await self._manager.start(version=self._version)
+                cfg = self.config or {}
+                version = (cfg.get("mihomo_version") or "v1.18.10").strip()
+                await self._manager.start(version=version)
                 self._started = True
                 yield event.plain_result("✅ Clash 已启动")
             except Exception as e:
@@ -166,15 +166,12 @@ class ClashPlugin(Star):
             try:
                 import httpx
                 url = f"http://127.0.0.1:{self._manager.api_port}/version"
-                headers = {}
-                if self._manager.api_secret:
-                    headers["Authorization"] = f"Bearer {self._manager.api_secret}"
+                headers = {"Authorization": f"Bearer {self._manager.api_secret}"} if self._manager.api_secret else {}
                 async with httpx.AsyncClient(timeout=3.0) as client:
                     r = await client.get(url, headers=headers)
                     data = r.json()
                 yield event.plain_result(
-                    f"📦 mihomo 版本: {data.get('version', '?')} "
-                    f"(premium={data.get('premium', False)})"
+                    f"📦 mihomo 版本: {data.get('version', '?')} (premium={data.get('premium', False)})"
                 )
             except Exception as e:
                 yield event.plain_result(f"❌ 获取版本失败: {e}")
@@ -183,3 +180,61 @@ class ClashPlugin(Star):
             yield event.plain_result(
                 "可用指令: status / restart / stop / start / version"
             )
+
+    async def status_api(self):
+        """返回运行状态 + 代理组简要信息"""
+        if not self._manager or not self._manager.is_running():
+            return json_response({"running": False})
+        try:
+            proxies = await self._manager.get_proxies()
+            # 提取所有 select 类型的组及其当前节点
+            groups = {}
+            for name, data in proxies.get("proxies", {}).items():
+                if data.get("type") == "Selector" and "all" in data:
+                    groups[name] = {
+                        "now": data.get("now"),
+                        "all": data.get("all", [])
+                    }
+            return json_response({"running": True, "groups": groups})
+        except Exception as e:
+            return error_response(str(e), status_code=500)
+
+    async def proxies_api(self):
+        """返回全部代理数据（用于前端展示）"""
+        if not self._manager or not self._manager.is_running():
+            return error_response("mihomo 未运行", status_code=503)
+        try:
+            data = await self._manager.get_proxies()
+            return json_response(data)
+        except Exception as e:
+            return error_response(str(e), status_code=500)
+
+    async def switch_api(self):
+        """切换节点"""
+        if not self._manager or not self._manager.is_running():
+            return error_response("mihomo 未运行", status_code=503)
+        payload = await request.json()
+        group = payload.get("group")
+        node = payload.get("node")
+        if not group or not node:
+            return error_response("缺少 group 或 node", status_code=400)
+        try:
+            await self._manager.switch_proxy(group, node)
+            return json_response({"success": True})
+        except Exception as e:
+            return error_response(str(e), status_code=500)
+
+    async def delay_api(self):
+        """测试延迟"""
+        if not self._manager or not self._manager.is_running():
+            return error_response("mihomo 未运行", status_code=503)
+        group = request.query.get("group")
+        node = request.query.get("node")
+        timeout = request.query.get("timeout", 5000, type=int)
+        if not group:
+            return error_response("缺少 group 参数", status_code=400)
+        try:
+            result = await self._manager.test_delay(group, node, timeout)
+            return json_response(result)
+        except Exception as e:
+            return error_response(str(e), status_code=500)

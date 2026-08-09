@@ -1,0 +1,24 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clash 代理管理</title>
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app">
+    <header>
+      <h1>🧩 Clash 代理管理</h1>
+      <div id="status-badge">⏳ 加载中...</div>
+    </header>
+    <main>
+      <section id="groups-container">
+        <!-- 动态渲染代理组 -->
+      </section>
+    </main>
+  </div>
+  <div id="notification" style="position:fixed; top:20px; right:20px; background:#333; color:#fff; padding:12px 20px; border-radius:8px; display:none; z-index:1000; font-size:14px; box-shadow:0 4px 8px rgba(0,0,0,0.3);"></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>

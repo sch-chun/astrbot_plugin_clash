@@ -1,4 +1,4 @@
-name: astrbot_plugin_clash
+name: clash
 display_name: Clash 代理管理器
 desc: 在 AstrBot 插件中启动并管理 Clash (mihomo) 代理
 version: v0.1.0
