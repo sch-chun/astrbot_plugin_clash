@@ -3,15 +3,11 @@ from __future__ import annotations
 
 import asyncio
 import gzip
-import hashlib
-import io
-import os
 import platform
 import shutil
 import stat
 import subprocess
 import sys
-import tarfile
 import zipfile
 from pathlib import Path
 from typing import Optional
@@ -20,8 +16,7 @@ import httpx
 import yaml
 from astrbot.api import logger
 
-# mihomo release asset 名模板
-# 官方命名：mihomo-{os}-{arch}-{version}.gz （linux/freebsd/darwin/windows, amd64/arm64/...）
+# mihomo (原 Clash Meta) 的 GitHub Releases
 MIHOMO_RELEASE_BASE = "https://github.com/MetaCubeX/mihomo/releases/download"
 
 
@@ -59,6 +54,10 @@ def _asset_extension(os_name: str) -> str:
     return "zip" if os_name == "windows" else "gz"
 
 
+def _binary_name(os_name: str) -> str:
+    return "mihomo.exe" if os_name == "windows" else "mihomo"
+
+
 class ClashManager:
     """管理 mihomo 二进制、配置和进程生命周期"""
 
@@ -87,38 +86,49 @@ class ClashManager:
 
     # -------------------- 二进制管理 --------------------
 
-    async def ensure_binary(self, version: str = "v1.18.10") -> Path:
+    async def ensure_binary(self, version: str = "v1.19.29") -> Path:
         """确保 mihomo 二进制存在；缺失则下载。返回二进制路径"""
         self.bin_dir.mkdir(parents=True, exist_ok=True)
 
         os_name, arch = _detect_arch()
         is_windows = os_name == "windows"
         ext = _asset_extension(os_name)
+        bin_name = _binary_name(os_name)
 
-        # 简化版二进制命名
-        binary_filename = "mihomo.exe" if is_windows else "mihomo"
-        binary_path = self.bin_dir / binary_filename
+        binary_path = self.bin_dir / bin_name
 
+        # 已存在且大小合理 -> 跳过
         if binary_path.exists() and binary_path.stat().st_size > 1024 * 1024:
             logger.info(f"mihomo 二进制已存在: {binary_path}")
             self._binary_path = binary_path
             return binary_path
 
-        # 下载 release asset
-        asset_name = f"mihomo-{os_name}-{arch}-{version}.{ext}"
-        url = f"{MIHOMO_RELEASE_BASE}/{version}/{asset_name}"
-        compressed_path = self.bin_dir / asset_name
+        # 尝试下载：优先 plain 名，失败则试 compatible 变体
+        asset_names = [
+            f"mihomo-{os_name}-{arch}-{version}.{ext}",
+            f"mihomo-{os_name}-{arch}-compatible-{version}.{ext}",
+        ]
 
-        logger.info(f"开始下载 mihomo: {url}")
-        try:
-            await self._download_file(url, compressed_path)
-        except Exception as e:
-            # 尝试不带版本号（latest）的命名
-            alt_asset_name = f"mihomo-{os_name}-{arch}.{ext}"
-            alt_url = f"https://github.com/MetaCubeX/mihomo/releases/latest/download/{alt_asset_name}"
-            logger.warning(f"指定版本下载失败: {e}，尝试 latest: {alt_url}")
-            await self._download_file(alt_url, self.bin_dir / alt_asset_name)
-            compressed_path = self.bin_dir / alt_asset_name
+        downloaded = False
+        compressed_path = self.bin_dir / asset_names[0]
+
+        for asset_name in asset_names:
+            url = f"{MIHOMO_RELEASE_BASE}/{version}/{asset_name}"
+            compressed_path = self.bin_dir / asset_name
+            logger.info(f"尝试下载 mihomo: {url}")
+            try:
+                await self._download_file(url, compressed_path)
+                downloaded = True
+                break
+            except Exception as e:
+                logger.warning(f"下载失败 ({asset_name}): {e}")
+                continue
+
+        if not downloaded:
+            raise RuntimeError(
+                f"无法下载 mihomo {version}，请检查版本号是否正确。"
+                f"已尝试: {asset_names}"
+            )
 
         # 解压
         logger.info(f"解压 mihomo 到 {binary_path}")
@@ -150,7 +160,10 @@ class ClashManager:
             raise RuntimeError(f"mihomo 二进制安装失败: {binary_path}")
 
         self._binary_path = binary_path
-        logger.info(f"mihomo 已就绪: {binary_path} ({binary_path.stat().st_size / 1024 / 1024:.1f} MB)")
+        logger.info(
+            f"mihomo 已就绪: {binary_path} "
+            f"({binary_path.stat().st_size / 1024 / 1024:.1f} MB)"
+        )
         return binary_path
 
     @staticmethod
@@ -201,47 +214,13 @@ class ClashManager:
             raise RuntimeError(f"解析订阅 YAML 失败: {e}")
 
     def _default_config(self) -> dict:
-        """生成默认的 mihomo 配置（混合端口 + API）"""
-        # 使用 mixed-port 同时提供 HTTP/SOCKS
-        listeners: list[dict] = []
-        if self.mixed_port > 0:
-            listeners.append({
-                "name": "mixed",
-                "type": "mixed",
-                "port": self.mixed_port,
-                "listen": "127.0.0.1",
-            })
-        else:
-            listeners.append({
-                "name": "http",
-                "type": "http",
-                "port": self.http_port,
-                "listen": "127.0.0.1",
-            })
-            listeners.append({
-                "name": "socks",
-                "type": "socks",
-                "port": self.socks_port,
-                "listen": "127.0.0.1",
-            })
-
-        return {
-            "mixed-port": self.mixed_port if self.mixed_port > 0 else None,
-            "port": None if self.mixed_port > 0 else self.http_port,
-            "socks-port": None if self.mixed_port > 0 else self.socks_port,
+        """生成默认的 mihomo 配置（使用标准顶层端口键，非 listeners 数组）"""
+        cfg: dict = {
             "allow-lan": False,
             "mode": "rule",
             "log-level": "warning",
             "external-controller": f"127.0.0.1:{self.api_port}",
-            "external-controller-cors": {
-                "allow-private-network": True,
-                "allow-origins": ["*"],
-                "allow-methods": ["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-                "allow-headers": ["*"],
-                "expose-headers": ["*"],
-            },
             "secret": self.api_secret or "",
-            "listeners": listeners,
             "proxies": [],
             "proxy-groups": [
                 {
@@ -254,6 +233,15 @@ class ClashManager:
                 "MATCH,manual",
             ],
         }
+
+        # 使用 mixed-port 或传统的 port+socks-port
+        if self.mixed_port > 0:
+            cfg["mixed-port"] = self.mixed_port
+        else:
+            cfg["port"] = self.http_port
+            cfg["socks-port"] = self.socks_port
+
+        return cfg
 
     async def write_config(self) -> Path:
         """生成 config.yaml，返回配置文件路径"""
@@ -275,6 +263,10 @@ class ClashManager:
             cfg["mixed-port"] = self.mixed_port
             cfg.pop("port", None)
             cfg.pop("socks-port", None)
+        else:
+            cfg.pop("mixed-port", None)
+            cfg["port"] = self.http_port
+            cfg["socks-port"] = self.socks_port
 
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
@@ -284,7 +276,7 @@ class ClashManager:
 
     # -------------------- 进程管理 --------------------
 
-    async def start(self, version: str = "v1.18.10") -> None:
+    async def start(self, version: str = "v1.19.29") -> None:
         """下载/校验二进制，写入配置，启动进程"""
         if self.is_running():
             logger.warning("mihomo 已经在运行中")
@@ -295,12 +287,24 @@ class ClashManager:
 
         assert self._binary_path is not None
 
+        # 先测试配置合法性
+        logger.info("测试配置合法性...")
+        test_proc = subprocess.Popen(
+            [str(self._binary_path), "-d", str(self.work_dir), "-t"],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+        )
+        _, stderr = test_proc.communicate(timeout=10)
+        if test_proc.returncode != 0:
+            raise RuntimeError(f"配置测试失败:\n{stderr.decode(errors='replace')}")
+
+        # 启动进程
         log_path = self.work_dir / "mihomo.log"
         log_file = open(log_path, "ab")
 
         logger.info(f"启动 mihomo: {self._binary_path} -d {self.work_dir}")
         self._process = subprocess.Popen(
-            [str(self._binary_path), "-d", str(self.work_dir), "-f"],
+            [str(self._binary_path), "-d", str(self.work_dir)],
             stdout=log_file,
             stderr=subprocess.STDOUT,
             stdin=subprocess.DEVNULL,
@@ -318,11 +322,13 @@ class ClashManager:
         if self.api_secret:
             headers["Authorization"] = f"Bearer {self.api_secret}"
 
-        deadline = asyncio.get_event_loop().time() + timeout
+        deadline = asyncio.get_running_loop().time() + timeout
         async with httpx.AsyncClient(timeout=3.0) as client:
-            while asyncio.get_event_loop().time() < deadline:
+            while asyncio.get_running_loop().time() < deadline:
                 if self._process and self._process.poll() is not None:
-                    raise RuntimeError(f"mihomo 进程异常退出 (code={self._process.returncode})")
+                    raise RuntimeError(
+                        f"mihomo 进程异常退出 (code={self._process.returncode})"
+                    )
                 try:
                     r = await client.get(url, headers=headers)
                     if r.status_code == 200:
@@ -353,7 +359,7 @@ class ClashManager:
         except Exception as e:
             logger.error(f"停止 mihomo 时出错: {e}")
 
-    async def restart(self, version: str = "v1.18.10") -> None:
+    async def restart(self, version: str = "v1.19.29") -> None:
         """重启 mihomo"""
         await self.stop()
         await self.start(version)
