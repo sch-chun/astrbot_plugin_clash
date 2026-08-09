@@ -1,24 +1,27 @@
 {
   "subscription_url": {
-    "description": "Clash 订阅地址（支持返回 YAML 格式）",
+    "description": "Clash 订阅地址",
     "type": "string",
     "default": "",
-    "hint": "请输入订阅链接，插件将自动拉取并启动代理"
+    "hint": "需支持返回 YAML 格式，插件将自动拉取并启动代理"
   },
   "mixed_port": {
-    "description": "混合代理端口（HTTP+SOCKS5），设为 0 则分开设置",
+    "description": "混合代理端口",
     "type": "int",
-    "default": 7890
+    "default": 7890,
+    "hint": "若设置为 0，则使用 http_port 和 socks_port 分别设置 HTTP 和 SOCKS5 端口"
   },
   "http_port": {
-    "description": "HTTP 代理端口（仅当 mixed_port=0 时生效）",
+    "description": "HTTP 代理端口",
     "type": "int",
-    "default": 7890
+    "default": 7890,
+    "hint": "仅当 mixed_port=0 时生效"
   },
   "socks_port": {
-    "description": "SOCKS5 代理端口（仅当 mixed_port=0 时生效）",
+    "description": "SOCKS5 代理端口",
     "type": "int",
-    "default": 7891
+    "default": 7891,
+    "hint": "仅当 mixed_port=0 时生效"
   },
   "api_port": {
     "description": "mihomo 控制 API 端口",
