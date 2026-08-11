@@ -33,6 +33,7 @@ class ClashPlugin(Star):
         context.register_web_api("/clash/proxies", self.proxies_api, ["GET"], "获取所有代理")
         context.register_web_api("/clash/switch", self.switch_api, ["POST"], "切换节点")
         context.register_web_api("/clash/delay", self.delay_api, ["GET"], "测试延迟")
+        context.register_web_api("/clash/mode", self.set_mode_api, ["POST"], "设置代理模式")
 
     async def initialize(self) -> None:
         """插件启动：读取配置，下载/启动 Clash"""
@@ -45,15 +46,10 @@ class ClashPlugin(Star):
             api_port = int(cfg.get("api_port", 9090))
             api_secret = (cfg.get("api_secret") or "").strip()
             version = (cfg.get("clash_version") or "v1.19.29").strip()
-            auto_start = True
             subscription_refresh_minutes = int(cfg.get("subscription_refresh_minutes", 0))
             log_level = (cfg.get("log_level") or "info").strip().lower()
             if log_level not in ["info", "warning", "error"]:
                 log_level = "warning"
-
-            if not auto_start:
-                logger.info("Clash 插件配置 auto_start=false，跳过启动")
-                return
 
             bin_dir = _PLUGIN_DATA_DIR / "bin"
             work_dir = _PLUGIN_DATA_DIR / "config"
@@ -200,7 +196,12 @@ class ClashPlugin(Star):
                         "now": data.get("now"),
                         "all": data.get("all", [])
                     }
-            return json_response({"running": True, "groups": groups})
+
+            # 获取当前模式
+            configs = await self._manager._request("GET", "/configs")
+            mode = configs.get("mode", "unknown")
+            logger.info(f"Clash 状态 API 返回: running=True, groups={list(groups.keys())}, mode={mode}")
+            return json_response({"running": True, "groups": groups, "mode": mode})
         except Exception as e:
             return error_response(str(e), status_code=500)
 
@@ -243,5 +244,19 @@ class ClashPlugin(Star):
         try:
             result = await self._manager.test_delay(group, node, timeout, url)  # 传递 url
             return json_response(result)
+        except Exception as e:
+            return error_response(str(e), status_code=500)
+
+    async def set_mode_api(self):
+        """设置 Clash 运行模式"""
+        if not self._manager or not self._manager.is_running():
+            return error_response("Clash 未运行", status_code=503)
+        payload = await request.get_json()
+        mode = payload.get("mode")
+        if mode not in ("rule", "global", "direct"):
+            return error_response("mode 必须是 rule/global/direct", status_code=400)
+        try:
+            await self._manager.set_mode(mode)
+            return json_response({"success": True, "mode": mode})
         except Exception as e:
             return error_response(str(e), status_code=500)

@@ -487,3 +487,13 @@ class ClashManager:
             # 测试组内所有节点
             result = await self._request("GET", f"/group/{group_name}/delay", params=params)
             return result
+
+    async def set_mode(self, mode: str) -> None:
+        """切换运行模式: rule / global / direct"""
+        try:
+            await self._request("PATCH", "/configs", json={"mode": mode})
+            logger.info(f"模式切换成功")
+        except Exception as e:
+            logger.error(f"模式切换失败: {e}")
+            raise
+        

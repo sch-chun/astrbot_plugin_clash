@@ -3,6 +3,7 @@ const statusBadge = document.getElementById('status-badge');
 const container = document.getElementById('groups-container');
 
 let currentGroups = {};
+let currentMode = 'rule';
 
 function showMessage(msg, isError = true) {
   const el = document.getElementById('notification');
@@ -12,6 +13,29 @@ function showMessage(msg, isError = true) {
   el.style.background = isError ? '#d32f2f' : '#388e3c';
   clearTimeout(el._hideTimer);
   el._hideTimer = setTimeout(() => { el.style.display = 'none'; }, 4000);
+}
+
+function updateModeUI(mode) {
+  currentMode = mode;
+  document.querySelectorAll('.mode-btn[data-mode]').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  });
+}
+
+function getFilteredGroups() {
+  if (currentMode === 'rule') {
+    return Object.fromEntries(
+      Object.entries(currentGroups).filter(([name]) => name.toUpperCase() !== 'GLOBAL')
+    );
+  } else if (currentMode === 'global') {
+    return Object.fromEntries(
+      Object.entries(currentGroups).filter(([name]) => name.toUpperCase() === 'GLOBAL')
+    );
+  } else if (currentMode === 'direct') {
+    return {};
+  } else {
+    return currentGroups;
+  }
 }
 
 async function loadStatus() {
@@ -24,6 +48,9 @@ async function loadStatus() {
     }
     statusBadge.textContent = '✅ 代理运行中';
     currentGroups = status.groups || {};
+    if (status.mode) {
+      updateModeUI(status.mode);
+    }
     renderGroups();
   } catch (err) {
     statusBadge.textContent = '❌ 加载失败';
@@ -32,13 +59,36 @@ async function loadStatus() {
   }
 }
 
+async function setMode(mode) {
+  try {
+    await bridge.apiPost('mode', { mode });
+    showMessage(`已切换到 ${mode} 模式`, false);
+    currentMode = mode;
+    updateModeUI(mode);
+    renderGroups();
+  } catch (err) {
+    showMessage(`切换模式失败：${err.message}`);
+  }
+}
+
 function renderGroups() {
-  if (Object.keys(currentGroups).length === 0) {
-    container.innerHTML = '<p>没有可切换的代理组。</p>';
+  const filteredGroups = getFilteredGroups();
+
+  if (Object.keys(filteredGroups).length === 0) {
+    let msg = '';
+    if (currentMode === 'direct') {
+      msg = '🔄 直连模式下所有流量将直接访问，不经过代理。';
+    } else if (currentMode === 'global') {
+      msg = '🌐 全局模式下未找到 GLOBAL 组，请检查订阅配置。';
+    } else {
+      msg = '没有可切换的代理组。';
+    }
+    container.innerHTML = `<p>${msg}</p>`;
     return;
   }
+
   let html = '';
-  for (const [groupName, groupData] of Object.entries(currentGroups)) {
+  for (const [groupName, groupData] of Object.entries(filteredGroups)) {
     html += `
       <div class="group-card" data-group="${groupName}">
         <div class="group-header">
@@ -50,7 +100,7 @@ function renderGroups() {
             <span class="node-item ${node === groupData.now ? 'active' : ''}" data-group="${groupName}" data-node="${node}">
               ${node}
               <span class="delay" id="delay-${groupName}-${node}"></span>
-              <button class="btn-test" data-group="${groupName}" data-node="${node}" title="测试延迟">📶</button>
+              <button class="btn-test" data-group="${groupName}" data-node="${node}" title="测试延迟"></button>
             </span>
           `).join('')}
         </div>
@@ -74,10 +124,10 @@ function renderGroups() {
       const group = btn.dataset.group;
       const node = btn.dataset.node;
       btn.disabled = true;
-      btn.textContent = '⏳';
-      await testDelay(group, node);
+      btn.textContent = '…';
+      await testDelay(group, node, false);
       btn.disabled = false;
-      btn.textContent = '📶';
+      btn.textContent = '';
     });
   });
 }
@@ -92,32 +142,62 @@ async function switchNode(group, node) {
   }
 }
 
-async function testDelay(group, node) {
+async function testDelay(group, node, silent = false) {
   const delaySpan = document.getElementById(`delay-${group}-${node}`);
   if (!delaySpan) return;
   delaySpan.textContent = '测速中...';
   try {
-    
-    // 添加一个可靠的测速 URL
     const result = await bridge.apiGet('delay', {
       group,
       node,
       timeout: 5000,
-      url: 'http://www.gstatic.com/generate_204'  // 或 https://cp.cloudflare.com/generate_204
+      url: 'http://www.gstatic.com/generate_204'
     });
     const delay = result[node];
     if (delay !== undefined && delay !== null) {
       delaySpan.textContent = `${delay}ms`;
+      delaySpan.style.color = delay < 100 ? '#2e7d32' : delay < 300 ? '#ed6c02' : '#d32f2f';
     } else {
       delaySpan.textContent = '超时';
     }
   } catch (err) {
     delaySpan.textContent = '错误';
-    showMessage(`测速失败：${err.message}`);
+    if (!silent) {
+      showMessage(`测速失败：${err.message}`);
+    }
     console.error(err);
   }
 }
 
+async function batchTest() {
+  const btn = document.getElementById('batch-test-btn');
+  if (!btn) return;
+  btn.disabled = true;
+  btn.textContent = '测速中…';
+
+  const filtered = getFilteredGroups();
+  const tasks = [];
+  for (const [groupName, groupData] of Object.entries(filtered)) {
+    for (const node of groupData.all) {
+      tasks.push(testDelay(groupName, node, true));
+    }
+  }
+  await Promise.allSettled(tasks);
+
+  btn.disabled = false;
+  btn.textContent = '一键测速';
+}
+
 // 初始化
 await bridge.ready();
+
+document.querySelectorAll('.mode-btn[data-mode]').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.mode;
+    setMode(mode);
+  });
+});
+
+document.getElementById('batch-test-btn')?.addEventListener('click', batchTest);
+
 loadStatus();

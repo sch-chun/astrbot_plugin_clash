@@ -12,6 +12,15 @@
       <h1>🧩 Clash 代理管理</h1>
       <div id="status-badge">⏳ 加载中...</div>
     </header>
+    <div id="mode-row">
+      <div id="mode-bar">
+        <span>模式：</span>
+        <button class="mode-btn" data-mode="rule">规则</button>
+        <button class="mode-btn" data-mode="global">全局</button>
+        <button class="mode-btn" data-mode="direct">直连</button>
+      </div>
+      <button id="batch-test-btn">一键测速</button>
+    </div>
     <main>
       <section id="groups-container">
         <!-- 动态渲染代理组 -->

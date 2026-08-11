@@ -5,6 +5,7 @@
   --border: #d0d7de;
   --primary: #2f81f7;
 }
+
 [data-theme="dark"] {
   --bg: #0d1117;
   --card-bg: #161b22;
@@ -12,36 +13,115 @@
   --border: #30363d;
   --primary: #58a6ff;
 }
+
+/* 全局字体和间距 */
 body {
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-  margin: 0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   padding: 20px;
+  line-height: 1.6;
 }
+
 #app {
   max-width: 1200px;
   margin: 0 auto;
 }
+
+/* header 优化 */
 header {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  margin-bottom: 24px;
+  justify-content: space-between;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+header h1 {
+  font-size: 24px;
+  font-weight: 600;
+  margin: 0;
 }
 #status-badge {
-  padding: 4px 12px;
-  border-radius: 12px;
+  padding: 6px 16px;
+  border-radius: 20px;
   font-size: 14px;
   background: var(--card-bg);
   border: 1px solid var(--border);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.04);
 }
+
+/* 模式行容器 - 水平分布，两端对齐 */
+#mode-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 20px;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+/* 模式切换条 */
+#mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--card-bg);
+  padding: 8px 16px;
+  border-radius: 40px;
+  border: 1px solid var(--border);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+  width: fit-content;
+}
+#mode-bar span {
+  font-weight: 500;
+  margin-right: 4px;
+  font-size: 14px;
+}
+
+.mode-btn {
+  background: transparent;
+  border: 1px solid transparent; /* 占位，防止 hover 抖动 */
+  padding: 6px 18px;
+  border-radius: 30px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text);
+  cursor: pointer;
+  transition: all 0.2s;
+  outline: none;
+}
+.mode-btn:hover {
+  background: var(--bg);
+  border-color: var(--border);
+}
+.mode-btn.active {
+  background: var(--primary);
+  color: #fff;
+  border-color: var(--primary);
+  box-shadow: 0 2px 8px rgba(47, 129, 247, 0.4);
+  font-weight: 600;
+}
+
+/* 暗色主题下 active 按钮背景亮蓝，文字用深色增强对比 */
+[data-theme="dark"] .mode-btn.active {
+  background: #58a6ff;
+  border-color: #58a6ff;
+  color: #0d1117;
+}
+
+/* 卡片 */
 .group-card {
   background: var(--card-bg);
   border: 1px solid var(--border);
-  border-radius: 8px;
-  padding: 16px;
+  border-radius: 12px;
+  padding: 18px 20px;
   margin-bottom: 16px;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.04);
+  transition: box-shadow 0.2s;
+}
+.group-card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,0.08);
 }
 .group-header {
   display: flex;
@@ -54,9 +134,14 @@ header {
   font-size: 16px;
 }
 .current-node {
-  font-size: 14px;
+  font-size: 13px;
   color: var(--primary);
+  background: var(--bg);
+  padding: 2px 12px;
+  border-radius: 12px;
 }
+
+/* 节点列表 */
 .node-list {
   display: flex;
   flex-wrap: wrap;
@@ -67,34 +152,87 @@ header {
   align-items: center;
   gap: 6px;
   background: var(--bg);
-  padding: 4px 10px;
-  border-radius: 16px;
-  border: 1px solid var(--border);
+  padding: 4px 12px 4px 14px;
+  border-radius: 30px;
+  border: 1px solid transparent;
   font-size: 13px;
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all 0.15s;
 }
 .node-item:hover {
   border-color: var(--primary);
+  background: var(--card-bg);
+  transform: translateY(-1px);
 }
 .node-item.active {
   border-color: var(--primary);
   background: var(--primary);
   color: #fff;
+  box-shadow: 0 2px 8px rgba(47, 129, 247, 0.35);
 }
 .node-item .delay {
   font-size: 11px;
   opacity: 0.7;
   margin-left: 4px;
+  min-width: 36px;
+  text-align: right;
 }
+
+/* 测速按钮 */
 .btn-test {
-  background: none;
-  border: none;
+  background: transparent;
+  border: 1px solid var(--border);
   cursor: pointer;
-  font-size: 14px;
-  padding: 0 4px;
+  font-size: 11px;
+  font-weight: 500;
+  padding: 2px 12px;
+  border-radius: 30px;
+  transition: all 0.2s;
+  color: var(--text);
+  line-height: 1.6;
+  margin-left: 4px;
+}
+.btn-test::after {
+  content: "测速";
+  font-size: 11px;
+  font-weight: 500;
+}
+.btn-test:hover {
+  background: var(--border);
 }
 .btn-test:disabled {
   opacity: 0.4;
   cursor: not-allowed;
+}
+.btn-test:disabled::after {
+  content: "…";
+}
+/* 节点被选中时，测速按钮反色 */
+.node-item.active .btn-test {
+  color: #fff;
+  border-color: #fff;
+}
+
+/* 独立的一键测速按钮 */
+#batch-test-btn {
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  padding: 8px 20px;
+  border-radius: 30px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.2s;
+  white-space: nowrap;
+  box-shadow: 0 2px 6px rgba(47, 129, 247, 0.25);
+}
+#batch-test-btn:hover {
+  opacity: 0.85;
+  transform: scale(1.02);
+}
+#batch-test-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+  transform: none;
 }
