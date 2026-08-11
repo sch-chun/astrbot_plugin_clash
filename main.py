@@ -1,5 +1,5 @@
-"""AstrBot 插件：Clash (mihomo) 代理管理器
-启动时自动下载 mihomo 二进制、加载订阅配置、运行进程；结束时清理。
+"""AstrBot 插件：Clash 代理管理器
+启动时自动下载 Clash 二进制、加载订阅配置、运行进程；结束时清理。
 """
 import asyncio
 from pathlib import Path
@@ -10,7 +10,8 @@ from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 
 try:
-    from astrbot.api.web import json_response, error_response, request
+    from astrbot.api.web import json_response, error_response
+    from quart import request
 except ImportError:
     from quart import jsonify as json_response, Response as error_response, request
 
@@ -43,9 +44,12 @@ class ClashPlugin(Star):
             socks_port = int(cfg.get("socks_port", 7891))
             api_port = int(cfg.get("api_port", 9090))
             api_secret = (cfg.get("api_secret") or "").strip()
-            version = (cfg.get("mihomo_version") or "v1.18.10").strip()
+            version = (cfg.get("clash_version") or "v1.19.29").strip()
             auto_start = True
             subscription_refresh_minutes = int(cfg.get("subscription_refresh_minutes", 0))
+            log_level = (cfg.get("log_level") or "info").strip().lower()
+            if log_level not in ["info", "warning", "error"]:
+                log_level = "warning"
 
             if not auto_start:
                 logger.info("Clash 插件配置 auto_start=false，跳过启动")
@@ -62,6 +66,7 @@ class ClashPlugin(Star):
                 api_port=api_port,
                 api_secret=api_secret,
                 mixed_port=mixed_port,
+                log_level=log_level
             )
 
             if subscription_url:
@@ -98,13 +103,13 @@ class ClashPlugin(Star):
             return
 
     async def terminate(self) -> None:
-        """插件卸载/停用：清理 mihomo 进程"""
+        """插件卸载/停用：清理 Clash 进程"""
         self._started = False
         if self._manager:
             try:
                 await self._manager.stop()
             except Exception as e:
-                logger.warning(f"停止 mihomo 时出错: {e}")
+                logger.warning(f"停止 Clash 时出错: {e}")
             self._manager = None
         logger.info("Clash 插件已关闭")
 
@@ -118,7 +123,7 @@ class ClashPlugin(Star):
           /clash restart        - 重启 Clash
           /clash stop           - 停止 Clash
           /clash start          - 启动 Clash
-          /clash version        - 查看 mihomo 版本
+          /clash version        - 查看 Clash 版本
         """
         if not self._manager:
             yield event.plain_result("❌ Clash 插件未初始化")
@@ -155,7 +160,7 @@ class ClashPlugin(Star):
         elif sub == "start":
             try:
                 cfg = self.config or {}
-                version = (cfg.get("mihomo_version") or "v1.18.10").strip()
+                version = (cfg.get("clash_version") or "v1.19.29").strip()
                 await self._manager.start(version=version)
                 self._started = True
                 yield event.plain_result("✅ Clash 已启动")
@@ -171,7 +176,7 @@ class ClashPlugin(Star):
                     r = await client.get(url, headers=headers)
                     data = r.json()
                 yield event.plain_result(
-                    f"📦 mihomo 版本: {data.get('version', '?')} (premium={data.get('premium', False)})"
+                    f"📦 Clash 版本: {data.get('version', '?')} (premium={data.get('premium', False)})"
                 )
             except Exception as e:
                 yield event.plain_result(f"❌ 获取版本失败: {e}")
@@ -202,7 +207,7 @@ class ClashPlugin(Star):
     async def proxies_api(self):
         """返回全部代理数据（用于前端展示）"""
         if not self._manager or not self._manager.is_running():
-            return error_response("mihomo 未运行", status_code=503)
+            return error_response("Clash 未运行", status_code=503)
         try:
             data = await self._manager.get_proxies()
             return json_response(data)
@@ -212,8 +217,8 @@ class ClashPlugin(Star):
     async def switch_api(self):
         """切换节点"""
         if not self._manager or not self._manager.is_running():
-            return error_response("mihomo 未运行", status_code=503)
-        payload = await request.json()
+            return error_response("Clash 未运行", status_code=503)
+        payload = await request.get_json()
         group = payload.get("group")
         node = payload.get("node")
         if not group or not node:
@@ -222,19 +227,21 @@ class ClashPlugin(Star):
             await self._manager.switch_proxy(group, node)
             return json_response({"success": True})
         except Exception as e:
+            logger.error(f"切换节点失败: {e}", exc_info=True)
             return error_response(str(e), status_code=500)
 
     async def delay_api(self):
         """测试延迟"""
         if not self._manager or not self._manager.is_running():
-            return error_response("mihomo 未运行", status_code=503)
-        group = request.query.get("group")
-        node = request.query.get("node")
-        timeout = request.query.get("timeout", 5000, type=int)
+            return error_response("Clash 未运行", status_code=503)
+        group = request.args.get("group")
+        node = request.args.get("node")
+        timeout = request.args.get("timeout", default=5000, type=int)
+        url = request.args.get("url", default="http://www.gstatic.com/generate_204")  # 新增
         if not group:
             return error_response("缺少 group 参数", status_code=400)
         try:
-            result = await self._manager.test_delay(group, node, timeout)
+            result = await self._manager.test_delay(group, node, timeout, url)  # 传递 url
             return json_response(result)
         except Exception as e:
             return error_response(str(e), status_code=500)

@@ -1,4 +1,4 @@
-"""Clash (mihomo) 二进制下载、配置生成、进程管理"""
+"""Clash 二进制下载、配置生成、进程管理"""
 from __future__ import annotations
 
 import asyncio
@@ -11,6 +11,7 @@ import sys
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
+import re
 
 from typing import Optional, Any
 
@@ -18,13 +19,13 @@ import httpx
 import yaml
 from astrbot.api import logger
 
-# mihomo release asset 名模板
-# 官方命名：mihomo-{os}-{arch}-{version}.gz （linux/freebsd/darwin/windows, amd64/arm64/...）
-MIHOMO_RELEASE_BASE = "https://github.com/MetaCubeX/mihomo/releases/download"
+# release asset 名模板
+# 官方命名：-{os}-{arch}-{version}.gz （linux/freebsd/darwin/windows, amd64/arm64/...）
+RELEASE_BASE = "https://github.com/MetaCubeX/mihomo/releases/download"
 
 
 def _detect_arch() -> tuple[str, str]:
-    """根据当前平台返回 mihomo release 的 (os, arch)"""
+    """根据当前平台返回 release 的 (os, arch)"""
     sys_platform = sys.platform.lower()
     machine = platform.machine().lower()
 
@@ -58,7 +59,7 @@ def _asset_extension(os_name: str) -> str:
 
 
 class ClashManager:
-    """管理 mihomo 二进制、配置和进程生命周期"""
+    """管理 Clash 二进制、配置和进程生命周期"""
 
     def __init__(
         self,
@@ -69,6 +70,7 @@ class ClashManager:
         api_port: int = 9090,
         api_secret: str = "",
         mixed_port: int = 0,
+        log_level: str = "warning"
     ) -> None:
         self.bin_dir = bin_dir
         self.work_dir = work_dir
@@ -77,16 +79,23 @@ class ClashManager:
         self.api_port = api_port
         self.api_secret = api_secret
         self.mixed_port = mixed_port
+        self.log_level = log_level
 
         self._process: Optional[subprocess.Popen] = None
         self._binary_path: Optional[Path] = None
         self._subscription_url: Optional[str] = None
         self._custom_config: Optional[dict] = None
 
+        self._stderr_errors = []
+        self._proxy_ready = False  # 是否看到代理端口成功日志
+        self._api_ready = False    # 是否看到 API 成功日志
+
+        self.LOG_LEVELS = {"info": 0, "warning": 1, "error": 2}
+
     # -------------------- 二进制管理 --------------------
 
     async def ensure_binary(self, version: str = "v1.18.10") -> Path:
-        """确保 mihomo 二进制存在；缺失则下载。返回二进制路径"""
+        """确保 Clash 二进制存在；缺失则下载。返回二进制路径"""
         self.bin_dir.mkdir(parents=True, exist_ok=True)
 
         os_name, arch = _detect_arch()
@@ -106,23 +115,23 @@ class ClashManager:
 
         # 如果二进制存在且版本匹配，直接返回
         if binary_path.exists() and current_version == version:
-            logger.info(f"mihomo 二进制已存在: {binary_path}")
+            logger.info(f"Clash 二进制已存在: {binary_path}")
             self._binary_path = binary_path
             return binary_path
 
         # 否则删除旧二进制（如果有）并重新下载
         if binary_path.exists():
-            logger.info(f"版本变更 ({current_version} -> {version})，重新下载 mihomo")
+            logger.info(f"版本变更 ({current_version} -> {version})，重新下载 Clash")
             binary_path.unlink()
         if version_file.exists():
             version_file.unlink()
 
         # 下载 release asset
         asset_name = f"mihomo-{os_name}-{arch}-{version}.{ext}"
-        url = f"{MIHOMO_RELEASE_BASE}/{version}/{asset_name}"
+        url = f"{RELEASE_BASE}/{version}/{asset_name}"
         compressed_path = self.bin_dir / asset_name
 
-        logger.info(f"开始下载 mihomo: {url}")
+        logger.info(f"开始下载 Clash: {url}")
         try:
             await self._download_file(url, compressed_path)
         except Exception as e:
@@ -134,7 +143,7 @@ class ClashManager:
             compressed_path = self.bin_dir / alt_asset_name
 
         # 解压
-        logger.info(f"解压 mihomo 到 {binary_path}")
+        logger.info(f"解压 Clash 到 {binary_path}")
         if ext == "gz":
             with gzip.open(compressed_path, "rb") as gz:
                 with open(binary_path, "wb") as out:
@@ -160,11 +169,11 @@ class ClashManager:
 
         # 验证
         if not binary_path.exists() or binary_path.stat().st_size < 1024 * 1024:
-            raise RuntimeError(f"mihomo 二进制安装失败: {binary_path}")
+            raise RuntimeError(f"Clash 二进制安装失败: {binary_path}")
 
         version_file.write_text(version)
         self._binary_path = binary_path
-        logger.info(f"mihomo 已就绪: {binary_path} ({binary_path.stat().st_size / 1024 / 1024:.1f} MB)")
+        logger.info(f"Clash 已就绪: {binary_path} ({binary_path.stat().st_size / 1024 / 1024:.1f} MB)")
         return binary_path
 
     @staticmethod
@@ -190,7 +199,7 @@ class ClashManager:
         assert self._subscription_url
         logger.info(f"拉取订阅配置: {self._subscription_url[:60]}...")
 
-        # 关键：设置 User-Agent 模拟 Clash 客户端
+        # 设置 User-Agent 模拟 Clash 客户端
         headers = {
             "User-Agent": "clash-verge/v2.4.0"  # 或 "Clash"
         }
@@ -209,12 +218,14 @@ class ClashManager:
             else:
                 raise RuntimeError("订阅返回的不是 YAML 字典")
         except yaml.YAMLError as e:
+
             # 如果仍然失败，可以尝试 Base64 解码等 fallback（可选）
             # 但鉴于 curl 已经成功，这里大概率不会失败
             raise RuntimeError(f"YAML 解析失败: {e}")
 
     def _default_config(self) -> dict:
-        """生成默认的 mihomo 配置（混合端口 + API）"""
+        """生成默认的 Clash 配置（混合端口 + API）"""
+
         # 使用 mixed-port 同时提供 HTTP/SOCKS
         listeners: list[dict] = []
         if self.mixed_port > 0:
@@ -297,82 +308,124 @@ class ClashManager:
 
     # -------------------- 进程管理 --------------------
 
-    async def start(self, version: str = "v1.18.10") -> None:
+    def _should_log(self, level_str: str) -> bool:
+        """判断该级别的日志是否应该打印"""
+        current = self.LOG_LEVELS.get(level_str, 0)
+        threshold = self.LOG_LEVELS.get(self.log_level, 0)
+        return current >= threshold
+
+    async def _read_output(self):
+        """读取 stdout（包含所有日志），解析关键状态"""
+        async for line in self._process.stdout:
+            decoded = line.decode('utf-8', errors='ignore').strip()
+
+            # 解析 level
+            level = "info"
+            match = re.search(r'level=(\w+)', decoded)
+            if match:
+                level = match.group(1).lower()
+
+            # 根据配置决定是否打印
+            if self._should_log(level):
+                logger.info(f"[Clash] {decoded}")
+
+            if "address already in use" in decoded:
+                self._stderr_errors.append(decoded)
+            if "Mixed(http+socks) proxy listening at" in decoded:
+                self._proxy_ready = True
+            if "RESTful API listening at" in decoded:
+                self._api_ready = True
+
+    async def start(self, version) -> None:
         """下载/校验二进制，写入配置，启动进程"""
         if self.is_running():
-            logger.warning("mihomo 已经在运行中")
+            logger.warning("Clash 已经在运行中")
             return
 
         await self.ensure_binary(version)
-        config_path = await self.write_config()
+        await self.write_config()
 
         assert self._binary_path is not None
 
-        log_path = self.work_dir / "mihomo.log"
-        log_file = open(log_path, "ab")
-
-        logger.info(f"启动 mihomo: {self._binary_path} -d {self.work_dir}")
-        self._process = subprocess.Popen(
-            [str(self._binary_path), "-d", str(self.work_dir)],
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            stdin=subprocess.DEVNULL,
+        # 使用异步子进程，捕获输出
+        self._process = await asyncio.create_subprocess_exec(
+            str(self._binary_path), "-d", str(self.work_dir),
+            stdout=asyncio.subprocess.PIPE,
+            stderr=asyncio.subprocess.STDOUT,
+            stdin=asyncio.subprocess.DEVNULL,
             start_new_session=True,
         )
 
-        # 等待外部 API 起来
-        await self._wait_api(timeout=120.0)
-        logger.info(f"mihomo 启动成功 (pid={self._process.pid})")
+        # 启动 stderr 读取任务
+        self._stderr_errors = []
+        self._output_task = asyncio.create_task(self._read_output())
 
-    async def _wait_api(self, timeout: float = 15.0) -> None:
-        """等待外部 API 可访问"""
-        url = f"http://127.0.0.1:{self.api_port}/version"
-        headers = {}
-        if self.api_secret:
-            headers["Authorization"] = f"Bearer {self.api_secret}"
+        try:
+            await self._wait_for_ready(timeout=120.0)
+        except Exception:
 
-        deadline = asyncio.get_event_loop().time() + timeout
-        async with httpx.AsyncClient(timeout=3.0) as client:
-            while asyncio.get_event_loop().time() < deadline:
-                if self._process and self._process.poll() is not None:
-                    raise RuntimeError(f"mihomo 进程异常退出 (code={self._process.returncode})")
-                try:
-                    r = await client.get(url, headers=headers)
-                    if r.status_code == 200:
-                        return
-                except Exception:
-                    pass
-                await asyncio.sleep(0.5)
-        raise RuntimeError("等待 mihomo API 超时")
+            # 如果异常，确保进程被终止
+            await self._terminate_process()
+            raise
+        logger.info(f"Clash 启动成功 (pid={self._process.pid})")
+
+    async def _wait_for_ready(self, timeout: float = 120.0):
+        """等待 API 和代理端口都就绪，或检测到错误，超时则抛出异常"""
+        start_time = asyncio.get_event_loop().time()
+        while asyncio.get_event_loop().time() - start_time < timeout:
+
+            # 检查进程是否退出
+            if self._process and self._process.returncode is not None:
+                raise RuntimeError(f"Clash 进程异常退出 (code={self._process.returncode})")
+            
+            # 检查错误
+            if self._stderr_errors:
+                raise RuntimeError(f"Clash 启动错误: {self._stderr_errors[-1]}")
+            
+            # 检查是否两者都就绪
+            if self._api_ready and self._proxy_ready:
+                return
+            await asyncio.sleep(0.2)
+
+        # 超时，给出具体未就绪的原因
+        if not self._api_ready:
+            raise RuntimeError("等待 API 就绪超时")
+        if not self._proxy_ready:
+            raise RuntimeError("等待代理端口就绪超时")
+
+    async def _terminate_process(self):
+        """终止 Clash 进程并清理任务"""
+        if self._process:
+            self._process.terminate()
+            try:
+                await asyncio.wait_for(self._process.wait(), timeout=5.0)
+            except asyncio.TimeoutError:
+                self._process.kill()
+                await self._process.wait()
+        if hasattr(self, '_output_task') and self._output_task:
+            self._output_task.cancel()
+            try:
+                await self._output_task
+            except asyncio.CancelledError:
+                pass
+        self._process = None
+        self._stderr_task = None
 
     async def stop(self, timeout: float = 5.0) -> None:
-        """停止 mihomo 进程"""
-        proc = self._process
-        self._process = None
-        if not proc:
+        """停止 Clash 进程"""
+        if not self._process:
             return
-        if proc.poll() is not None:
-            return
-
-        logger.info(f"正在停止 mihomo (pid={proc.pid})")
-        try:
-            proc.terminate()
-            try:
-                proc.wait(timeout=timeout)
-            except subprocess.TimeoutExpired:
-                logger.warning("mihomo 未响应 SIGTERM，发送 SIGKILL")
-                proc.kill()
-                proc.wait(timeout=2.0)
-        except Exception as e:
-            logger.error(f"停止 mihomo 时出错: {e}")
+        logger.info(f"正在停止 Clash (pid={self._process.pid})")
+        await self._terminate_process()
+        logger.info("Clash 已停止")
 
     async def restart(self, version: str = "v1.18.10") -> None:
-        """重启 mihomo"""
+        """重启 Clash"""
         await self.stop()
         await self.start(version)
 
     def is_running(self) -> bool:
-        return self._process is not None and self._process.poll() is None
+        return self._process is not None and self._process.returncode is None
 
     def status(self) -> dict:
         return {
@@ -395,7 +448,8 @@ class ClashManager:
         return headers
 
     async def _request(self, method: str, path: str, **kwargs) -> Any:
-        """发送请求到 mihomo REST API，自动对路径参数进行 URL 编码"""
+        """发送请求到 Clash REST API，自动对路径参数进行 URL 编码"""
+
         # 分割路径，编码每个片段，再重新组合
         parts = path.split('/')
         encoded_parts = [quote(part, safe='') for part in parts if part != '']
@@ -405,6 +459,8 @@ class ClashManager:
         async with httpx.AsyncClient(timeout=10.0) as client:
             resp = await client.request(method, url, headers=headers, **kwargs)
             resp.raise_for_status()
+            if resp.status_code == 204:
+                return None
             return resp.json()
 
     async def get_proxies(self) -> dict:
@@ -415,17 +471,19 @@ class ClashManager:
         """切换指定组的节点"""
         await self._request("PUT", f"/proxies/{group_name}", json={"name": node_name})
 
-    async def test_delay(self, group_name: str, node_name: str = None, timeout: int = 5000) -> dict:
+    async def test_delay(self, group_name: str, node_name: str = None, timeout: int = 5000, url: str = "http://www.gstatic.com/generate_204") -> dict:
         """
         测试节点延迟
         - node_name 为空则测试该组全部节点
+        - url 为测速目标地址
         - 返回 { node_name: delay } 或测试结果
         """
+        params = {"timeout": timeout, "url": url}  # 同时传递 timeout 和 url
         if node_name:
-            # 测试单个节点
-            result = await self._request("GET", f"/proxies/{node_name}/delay", params={"timeout": timeout})
+            result = await self._request("GET", f"/proxies/{node_name}/delay", params=params)
             return {node_name: result.get("delay")}
         else:
-            # 测试组内所有节点（mihomo 支持 group 级别测试）
-            result = await self._request("GET", f"/group/{group_name}/delay", params={"timeout": timeout})
-            return result  # 格式类似 {"node1": 100, "node2": 200}
+
+            # 测试组内所有节点
+            result = await self._request("GET", f"/group/{group_name}/delay", params=params)
+            return result

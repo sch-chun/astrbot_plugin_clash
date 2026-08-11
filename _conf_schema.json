@@ -24,7 +24,7 @@
     "hint": "仅当 mixed_port=0 时生效"
   },
   "api_port": {
-    "description": "mihomo 控制 API 端口",
+    "description": "Clash 控制 API 端口",
     "type": "int",
     "default": 9090
   },
@@ -33,9 +33,16 @@
     "type": "string",
     "default": ""
   },
-  "mihomo_version": {
-    "description": "mihomo 版本标签",
+  "clash_version": {
+    "description": "Clash 版本标签",
     "type": "string",
     "default": "v1.19.29"
+  },
+  "log_level": {
+    "description": "Clash 日志级别",
+    "type": "string",
+    "options": ["info", "warning", "error"],
+    "default": "warning",
+    "hint": "仅打印不低于该级别的日志到 AstrBot 统一日志"
   }
 }

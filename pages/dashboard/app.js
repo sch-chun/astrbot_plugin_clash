@@ -97,7 +97,14 @@ async function testDelay(group, node) {
   if (!delaySpan) return;
   delaySpan.textContent = '测速中...';
   try {
-    const result = await bridge.apiGet('delay', { group, node, timeout: 3000 });
+    
+    // 添加一个可靠的测速 URL
+    const result = await bridge.apiGet('delay', {
+      group,
+      node,
+      timeout: 5000,
+      url: 'http://www.gstatic.com/generate_204'  // 或 https://cp.cloudflare.com/generate_204
+    });
     const delay = result[node];
     if (delay !== undefined && delay !== null) {
       delaySpan.textContent = `${delay}ms`;
