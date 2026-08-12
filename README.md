@@ -1,6 +1,6 @@
 # astrbot_plugin_clash
 
-在 AstrBot 插件进程内直接启动并管理 [mihomo](https://github.com/MetaCubeX/mihomo) (Clash Meta) 代理，无需额外 sidecar 容器或宿主机安装，特别适合 K8s / Docker 等受限环境。
+在 AstrBot 插件进程内直接启动并管理 [Clash](https://github.com/MetaCubeX/mihomo) (Clash Meta) 代理，无需额外 sidecar 容器或宿主机安装，特别适合 K8s / Docker 等受限环境。
 
 > 当前版本：**v0.1.3** · 最低 AstrBot 版本：**>= 4.24.0**（需要 `register_web_api` 与 Dashboard Pages 支持）
 
@@ -8,7 +8,7 @@
 
 ## ✨ 功能特性
 
-- 🚀 **一键启动**：插件加载时自动下载 mihomo 二进制、解析订阅、启动进程
+- 🚀 **一键启动**：插件加载时自动下载二进制、解析订阅、启动进程
 - 📡 **订阅支持**：自动从订阅链接拉取 YAML 配置；可配置自动刷新间隔
 - 🔌 **多端口模式**：支持混合端口（HTTP+SOCKS5）或独立 HTTP / SOCKS 端口
 - 🎨 **WebUI 控制面板**：AstrBot Dashboard 内置页面，支持：
@@ -40,11 +40,11 @@
 | `mixed_port` | int | `7890` | 混合代理端口（同时提供 HTTP + SOCKS5）。设为 `0` 时使用下方独立端口 |
 | `http_port` | int | `7890` | HTTP 代理端口（仅 `mixed_port=0` 时生效） |
 | `socks_port` | int | `7891` | SOCKS5 代理端口（仅 `mixed_port=0` 时生效） |
-| `api_port` | int | `9090` | mihomo RESTful API 端口 |
+| `api_port` | int | `9090` | RESTful API 端口 |
 | `api_secret` | string | `""` | API 鉴权密钥（可选，留空则不启用） |
-| `clash_version` | string | `v1.19.29` | mihomo 版本标签，留空使用默认值。指定版本下载失败会自动 fallback 到 latest |
+| `clash_version` | string | `v1.19.29` | Clash 版本标签，留空使用默认值。指定版本下载失败会自动 fallback 到 latest |
 | `subscription_refresh_minutes` | int | `0` | 订阅自动刷新间隔（分钟）。`0` 表示不自动刷新 |
-| `log_level` | string | `warning` | mihomo 日志转写到 AstrBot 的级别过滤：`info` / `warning` / `error` |
+| `log_level` | string | `warning` | Clash 日志转写到 AstrBot 的级别过滤：`info` / `warning` / `error` |
 
 ---
 
@@ -81,16 +81,7 @@ WebUI 提供：
 
 ### 让 AstrBot 自身走代理
 
-启动成功后，将以下环境变量加入 AstrBot 的启动配置即可让大模型请求走本插件启动的代理：
-
-```bash
-# 方式一：混合端口（推荐）
-export HTTP_PROXY=http://127.0.0.1:7890
-export HTTPS_PROXY=http://127.0.0.1:7890
-export ALL_PROXY=socks5://127.0.0.1:7890
-```
-
-K8s / Docker 部署时可加入启动命令前缀。
+启动成功后，在模型提供商界面代理地址配置填入 http://127.0.0.1:<设置的代理端口号> 即可让大模型请求走本插件启动的代理：
 
 ---
 
@@ -102,7 +93,7 @@ astrbot_plugin_clash/
 ├── _conf_schema.json       # 配置 schema（Dashboard 编辑器使用）
 ├── metadata.yaml           # 插件元信息
 ├── src/
-│   └── clash_manager.py    # mihomo 二进制下载 / 配置生成 / 进程管理 / REST API 客户端
+│   └── clash_manager.py    #  二进制下载 / 配置生成 / 进程管理 / REST API 客户端
 └── pages/
     └── dashboard/          # WebUI 三件套（HTML / CSS / JS）
         ├── index.html
@@ -116,10 +107,10 @@ astrbot_plugin_clash/
 
 - 本插件**不需要特权模式**，不挂载宿主网络
 - 二进制与配置存储在 `data/plugins/astrbot_plugin_clash/data/` 下
-  - `data/bin/mihomo` (或 `mihomo.exe`)：下载的 mihomo 二进制
+  - `data/bin/mihomo` (或 `mihomo.exe`)：下载的二进制
   - `data/bin/.version`：当前二进制版本号（变更时自动重新下载）
   - `data/config/config.yaml`：运行时生成的配置
-- 首次启动需联网下载 mihomo（约 10–50 MB）；网络受限可提前放置二进制到 `data/bin/` 并写入 `data/bin/.version` 对应版本号
+- 首次启动需联网下载 Clash（约 10–50 MB）；网络受限可提前放置二进制到 `data/bin/` 并写入 `data/bin/.version` 对应版本号
 
 ---
 
@@ -131,7 +122,7 @@ A：确认订阅返回标准 YAML（非 Base64 编码）。本插件的 UA 为 `
 **Q：端口被占用？**
 A：日志中若出现 `address already in use`，请修改 `mixed_port` / `http_port` / `socks_port` / `api_port` 配置项后重启。
 
-**Q：怎么切换到更新的 mihomo 版本？**
+**Q：怎么切换到更新的 Clash 版本？**
 A：修改 `clash_version` 配置（如 `v1.19.29`），重启插件即可触发自动下载。
 
 **Q：插件卸载后进程还在？**
@@ -141,4 +132,4 @@ A：正常情况下 `terminate()` 会通过 `terminate()` → `kill()` 兜底清
 
 ## 📜 许可
 
-MIT
+AGPL 3.0
