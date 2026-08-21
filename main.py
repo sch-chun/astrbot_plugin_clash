@@ -8,18 +8,11 @@ from typing import Optional
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
+from astrbot.core.utils.astrbot_path import get_astrbot_data_path
 
-try:
-    from astrbot.api.web import json_response, error_response
-    from quart import request
-except ImportError:
-    from quart import jsonify as json_response, Response as error_response, request
+from astrbot.api.web import json_response, error_response, request
 
 from .src.clash_manager import ClashManager
-
-
-# 数据存放目录：插件目录下 data/
-_PLUGIN_DATA_DIR = Path(__file__).parent / "data"
 
 
 class ClashPlugin(Star):
@@ -29,11 +22,13 @@ class ClashPlugin(Star):
         self._manager: Optional[ClashManager] = None
         self._started = False
 
-        context.register_web_api("/clash/status", self.status_api, ["GET"], "获取运行状态和代理组")
-        context.register_web_api("/clash/proxies", self.proxies_api, ["GET"], "获取所有代理")
-        context.register_web_api("/clash/switch", self.switch_api, ["POST"], "切换节点")
-        context.register_web_api("/clash/delay", self.delay_api, ["GET"], "测试延迟")
-        context.register_web_api("/clash/mode", self.set_mode_api, ["POST"], "设置代理模式")
+        self.plugin_data_path = Path(get_astrbot_data_path()) / "plugin_data" / self.name
+
+        context.register_web_api(f"/{self.name}/status", self.status_api, ["GET"], "获取运行状态和代理组")
+        context.register_web_api(f"/{self.name}/proxies", self.proxies_api, ["GET"], "获取所有代理")
+        context.register_web_api(f"/{self.name}/switch", self.switch_api, ["POST"], "切换节点")
+        context.register_web_api(f"/{self.name}/delay", self.delay_api, ["GET"], "测试延迟")
+        context.register_web_api(f"/{self.name}/mode", self.set_mode_api, ["POST"], "设置代理模式")
 
     async def initialize(self) -> None:
         """插件启动：读取配置，下载/启动 Clash"""
@@ -48,11 +43,19 @@ class ClashPlugin(Star):
             version = (cfg.get("clash_version") or "v1.19.29").strip()
             subscription_refresh_minutes = int(cfg.get("subscription_refresh_minutes", 0))
             log_level = (cfg.get("log_level") or "info").strip().lower()
+
+            download_base_url = (
+                cfg.get("download_base_url") or
+                "https://github.com/MetaCubeX/mihomo/releases/download"
+            ).strip()
+
+            geoip_url = (cfg.get("geoip_url") or "").strip()
+
             if log_level not in ["info", "warning", "error"]:
                 log_level = "warning"
 
-            bin_dir = _PLUGIN_DATA_DIR / "bin"
-            work_dir = _PLUGIN_DATA_DIR / "config"
+            bin_dir = self.plugin_data_path / "bin"
+            work_dir = self.plugin_data_path / "config"
 
             self._manager = ClashManager(
                 bin_dir=bin_dir,
@@ -62,7 +65,9 @@ class ClashPlugin(Star):
                 api_port=api_port,
                 api_secret=api_secret,
                 mixed_port=mixed_port,
-                log_level=log_level
+                log_level=log_level,
+                download_base_url=download_base_url,
+                geoip_url=geoip_url if geoip_url else None
             )
 
             if subscription_url:
@@ -188,6 +193,7 @@ class ClashPlugin(Star):
             return json_response({"running": False})
         try:
             proxies = await self._manager.get_proxies()
+
             # 提取所有 select 类型的组及其当前节点
             groups = {}
             for name, data in proxies.get("proxies", {}).items():

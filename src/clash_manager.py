@@ -6,22 +6,19 @@ import gzip
 import platform
 import shutil
 import stat
-import subprocess
 import sys
 import zipfile
 from pathlib import Path
 from urllib.parse import quote
 import re
+import cpuinfo
 
 from typing import Optional, Any
+from asyncio.subprocess import Process
 
 import httpx
 import yaml
 from astrbot.api import logger
-
-# release asset 名模板
-# 官方命名：-{os}-{arch}-{version}.gz （linux/freebsd/darwin/windows, amd64/arm64/...）
-RELEASE_BASE = "https://github.com/MetaCubeX/mihomo/releases/download"
 
 
 def _detect_arch() -> tuple[str, str]:
@@ -58,9 +55,26 @@ def _asset_extension(os_name: str) -> str:
     return "zip" if os_name == "windows" else "gz"
 
 
+def _detect_go_amd64_level() -> str:
+    """自动检测 CPU 支持的 GOAMD64 等级，仅用于 Windows AMD64"""
+    try:
+        info = cpuinfo.get_cpu_info()
+        flags = [f.lower() for f in info.get('flags', [])]
+
+        # 判断 v3
+        if {'avx2', 'bmi1', 'bmi2', 'fma', 'lzcnt', 'movbe'}.issubset(set(flags)):
+            return "v3"
+        
+        # 判断 v2
+        if {'popcnt', 'sse4_1', 'sse4_2', 'ssse3'}.issubset(set(flags)):
+            return "v2"
+        return "v1"
+    except Exception:
+        return "v1"  # 保底
+
+
 class ClashManager:
     """管理 Clash 二进制、配置和进程生命周期"""
-
     def __init__(
         self,
         bin_dir: Path,
@@ -70,7 +84,10 @@ class ClashManager:
         api_port: int = 9090,
         api_secret: str = "",
         mixed_port: int = 0,
-        log_level: str = "warning"
+        log_level: str = "warning",
+        download_base_url: str = "https://github.com/MetaCubeX/mihomo/releases/download",
+        go_amd64_level: str = "auto",
+        geoip_url: Optional[str] = None
     ) -> None:
         self.bin_dir = bin_dir
         self.work_dir = work_dir
@@ -81,7 +98,7 @@ class ClashManager:
         self.mixed_port = mixed_port
         self.log_level = log_level
 
-        self._process: Optional[subprocess.Popen] = None
+        self._process: Optional[Process] = None
         self._binary_path: Optional[Path] = None
         self._subscription_url: Optional[str] = None
         self._custom_config: Optional[dict] = None
@@ -92,7 +109,30 @@ class ClashManager:
 
         self.LOG_LEVELS = {"info": 0, "warning": 1, "error": 2}
 
+        self.download_base_url = download_base_url
+
+        self.go_amd64_level = go_amd64_level.lower()
+        self._resolved_level = None
+
+        self.geoip_url = geoip_url
+
     # -------------------- 二进制管理 --------------------
+
+    def _resolve_level(self) -> str:
+        """解析 go_amd64_level"""
+        if self.go_amd64_level == "auto":
+            if self._resolved_level is None:
+                self._resolved_level = _detect_go_amd64_level()
+                logger.info(f"自动检测到 CPU 等级: {self._resolved_level}")
+            return self._resolved_level
+
+        # 用户手动指定
+        if self.go_amd64_level in ("v1", "v2", "v3", "compatible"):
+            return self.go_amd64_level
+
+        # 其它值视为 auto
+        logger.warning(f"无效的 go_amd64_level: {self.go_amd64_level}，回退到自动检测")
+        return _detect_go_amd64_level()
 
     async def ensure_binary(self, version: str = "v1.18.10") -> Path:
         """确保 Clash 二进制存在；缺失则下载。返回二进制路径"""
@@ -126,18 +166,34 @@ class ClashManager:
         if version_file.exists():
             version_file.unlink()
 
+        # 基础名称
+        base = f"mihomo-{os_name}-{arch}"
+        level_suffix = ""
+
+        # 只有 AMD64 需要附加 GOAMD64 等级
+        if arch == "amd64":
+
+            # 解析等级
+            level = self._resolve_level()
+            if level:
+                level_suffix = f"-{level}"
+            else:
+                logger.warning("无法自动检测 CPU 等级，将使用默认等级 compatible")
+                level_suffix = "-compatible"
+
         # 下载 release asset
-        asset_name = f"mihomo-{os_name}-{arch}-{version}.{ext}"
-        url = f"{RELEASE_BASE}/{version}/{asset_name}"
+        asset_name = f"{base}{level_suffix}-{version}.{ext}"
+        url = f"{self.download_base_url}/{version}/{asset_name}"
         compressed_path = self.bin_dir / asset_name
 
         logger.info(f"开始下载 Clash: {url}")
         try:
             await self._download_file(url, compressed_path)
         except Exception as e:
+
             # 尝试不带版本号（latest）的命名
             alt_asset_name = f"mihomo-{os_name}-{arch}.{ext}"
-            alt_url = f"https://github.com/MetaCubeX/mihomo/releases/latest/download/{alt_asset_name}"
+            alt_url = f"{self.download_base_url}/latest/download/{alt_asset_name}"
             logger.warning(f"指定版本下载失败: {e}，尝试 latest: {alt_url}")
             await self._download_file(alt_url, self.bin_dir / alt_asset_name)
             compressed_path = self.bin_dir / alt_asset_name
@@ -300,6 +356,21 @@ class ClashManager:
             cfg.pop("port", None)
             cfg.pop("socks-port", None)
 
+        # 移除 listeners
+        cfg.pop("listeners", None)
+
+        # 写入 GeoIP 下载地址
+        if self.geoip_url:
+            url_lower = self.geoip_url.lower()
+
+            # 如果是 .dat 文件，则启用 geodata-mode
+            if url_lower.endswith(".dat"):
+                cfg["geodata-mode"] = True
+            cfg["geox-url"] = {
+                "geoip": self.geoip_url,
+            }
+            
+
         with open(config_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(cfg, f, allow_unicode=True, sort_keys=False)
 
@@ -316,8 +387,14 @@ class ClashManager:
 
     async def _read_output(self):
         """读取 stdout（包含所有日志），解析关键状态"""
-        async for line in self._process.stdout:
-            decoded = line.decode('utf-8', errors='ignore').strip()
+        if self._process is None or self._process.stdout is None:
+            logger.error("尝试读取未启动的 Clash 进程输出")
+            return
+        while True:
+            line = await self._process.stdout.readline()
+            if not line:
+                break
+            decoded = line.decode("utf-8", errors="ignore").strip()
 
             # 解析 level
             level = "info"
@@ -329,12 +406,15 @@ class ClashManager:
             if self._should_log(level):
                 logger.info(f"[Clash] {decoded}")
 
-            if "address already in use" in decoded:
-                self._stderr_errors.append(decoded)
+            # 检测就绪标志
             if "Mixed(http+socks) proxy listening at" in decoded:
                 self._proxy_ready = True
             if "RESTful API listening at" in decoded:
                 self._api_ready = True
+
+            # 检测错误
+            if level == "error" and not (self._api_ready and self._proxy_ready):
+                self._stderr_errors.append(decoded)
 
     async def start(self, version) -> None:
         """下载/校验二进制，写入配置，启动进程"""
@@ -374,13 +454,20 @@ class ClashManager:
         start_time = asyncio.get_event_loop().time()
         while asyncio.get_event_loop().time() - start_time < timeout:
 
-            # 检查进程是否退出
-            if self._process and self._process.returncode is not None:
-                raise RuntimeError(f"Clash 进程异常退出 (code={self._process.returncode})")
-            
-            # 检查错误
+            # 优先检查错误
             if self._stderr_errors:
                 raise RuntimeError(f"Clash 启动错误: {self._stderr_errors[-1]}")
+
+            # 检查进程是否退出
+            if self._process and self._process.returncode is not None:
+                error_msg = ""
+                if self._process.stdout:
+                    try:
+                        remaining = await self._process.stdout.read()
+                        error_msg = remaining.decode("utf-8", errors="ignore")
+                    except Exception:
+                        pass
+                raise RuntimeError(f"Clash 进程异常退出 (code={self._process.returncode})\n{error_msg}")
             
             # 检查是否两者都就绪
             if self._api_ready and self._proxy_ready:
@@ -395,13 +482,19 @@ class ClashManager:
 
     async def _terminate_process(self):
         """终止 Clash 进程并清理任务"""
-        if self._process:
-            self._process.terminate()
-            try:
-                await asyncio.wait_for(self._process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                self._process.kill()
-                await self._process.wait()
+        if self._process is None:
+            return
+        if self._process.returncode is not None:
+            logger.warn(f"Clash 进程已退出 (code={self._process.returncode})，跳过终止")
+            self._process = None
+            return
+
+        self._process.terminate()
+        try:
+            await asyncio.wait_for(self._process.wait(), timeout=5.0)
+        except asyncio.TimeoutError:
+            self._process.kill()
+            await self._process.wait()
         if hasattr(self, '_output_task') and self._output_task:
             self._output_task.cancel()
             try:
@@ -409,7 +502,7 @@ class ClashManager:
             except asyncio.CancelledError:
                 pass
         self._process = None
-        self._stderr_task = None
+        self._output_task = None
 
     async def stop(self, timeout: float = 5.0) -> None:
         """停止 Clash 进程"""
@@ -471,7 +564,7 @@ class ClashManager:
         """切换指定组的节点"""
         await self._request("PUT", f"/proxies/{group_name}", json={"name": node_name})
 
-    async def test_delay(self, group_name: str, node_name: str = None, timeout: int = 5000, url: str = "http://www.gstatic.com/generate_204") -> dict:
+    async def test_delay(self, group_name: str, node_name: Optional[str] = None, timeout: int = 5000, url: str = "http://www.gstatic.com/generate_204") -> dict:
         """
         测试节点延迟
         - node_name 为空则测试该组全部节点

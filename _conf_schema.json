@@ -33,10 +33,29 @@
     "type": "string",
     "default": ""
   },
+  "download_base_url": {
+    "description": "Clash 下载基础 URL",
+    "type": "string",
+    "default": "https://github.com/MetaCubeX/mihomo/releases/download",
+    "hint": "用于下载 Clash 二进制文件。若无法连接 GitHub，可替换为镜像代理地址，例如 https://gh-proxy.com/https://github.com/MetaCubeX/mihomo/releases/download 或 https://ghproxy.net/https://github.com/MetaCubeX/mihomo/releases/download"
+  },
   "clash_version": {
     "description": "Clash 版本标签",
     "type": "string",
-    "default": "v1.19.29"
+    "default": "v1.19.30"
+  },
+  "go_amd64_level": {
+    "description": "Clash GOAMD64 指令集级别",
+    "type": "string",
+    "options": ["auto", "compatible", "v1", "v2", "v3"],
+    "default": "auto",
+    "hint": "仅当系统架构为 AMD64 时生效。根据自己的 CPU 选择合适的级别，选择 auto 将自动检测"
+  },
+  "geoip_url": {
+    "description": "GeoIP 数据库下载 URL",
+    "type": "string",
+    "default": "https://fastly.jsdelivr.net/gh/MetaCubeX/meta-rules-dat@release/geoip.dat",
+    "hint": "用于覆盖默认 GitHub 地址，解决下载超时问题。可替换为其他镜像，如 https://mirror.ghproxy.com/https://github.com/MetaCubeX/meta-rules-dat/releases/download/latest/geoip.dat"
   },
   "log_level": {
     "description": "Clash 日志级别",
