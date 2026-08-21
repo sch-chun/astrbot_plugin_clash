@@ -73,18 +73,29 @@ class ClashPlugin(Star):
             if subscription_url:
                 self._manager.set_subscription(subscription_url)
 
-            await self._manager.start(version=version)
-            self._started = True
+                # 有订阅时，自动启动 Clash
+                await self._manager.start(version=version)
+                self._started = True
 
-            # 如果启用订阅自动刷新
-            if subscription_refresh_minutes > 0 and subscription_url:
-                asyncio.create_task(self._refresh_loop(subscription_refresh_minutes * 60))
-                logger.info(f"已启用订阅自动刷新，间隔 {subscription_refresh_minutes} 分钟")
+                # 如果启用订阅自动刷新
+                if subscription_refresh_minutes > 0 and subscription_url:
+                    asyncio.create_task(self._refresh_loop(subscription_refresh_minutes * 60))
+                    logger.info(f"已启用订阅自动刷新，间隔 {subscription_refresh_minutes} 分钟")
 
-            logger.info(
-                f"✅ Clash 已就绪 (HTTP={http_port}, SOCKS={socks_port}, "
-                f"Mixed={mixed_port}, API={api_port})"
-            )
+                logger.info(
+                    f"✅ Clash 已就绪 (HTTP={http_port}, SOCKS={socks_port}, "
+                    f"Mixed={mixed_port}, API={api_port})"
+                )
+            else:
+
+                # 无订阅，仅下载二进制，不启动
+                await self._manager.ensure_binary(version)
+                logger.info(
+                    "ℹ️ 未配置订阅，Clash 二进制已安装但未启动。"
+                    "请配置订阅 URL 后使用 /clash start 启动，或重新加载插件。"
+                )
+                self._started = False
+                
         except Exception as e:
             logger.error(f"❌ Clash 插件初始化失败: {e}", exc_info=True)
 
