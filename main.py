@@ -3,13 +3,14 @@
 """
 import asyncio
 from pathlib import Path
+from httpx import HTTPStatusError
+
 from typing import Optional
 
 from astrbot.api import logger
 from astrbot.api.event import filter, AstrMessageEvent
 from astrbot.api.star import Context, Star
 from astrbot.core.utils.astrbot_path import get_astrbot_data_path
-
 from astrbot.api.web import json_response, error_response, request
 
 from .src.clash_manager import ClashManager
@@ -217,7 +218,6 @@ class ClashPlugin(Star):
             # 获取当前模式
             configs = await self._manager._request("GET", "/configs")
             mode = configs.get("mode", "unknown")
-            logger.info(f"Clash 状态 API 返回: running=True, groups={list(groups.keys())}, mode={mode}")
             return json_response({"running": True, "groups": groups, "mode": mode})
         except Exception as e:
             return error_response(str(e), status_code=500)
@@ -236,7 +236,9 @@ class ClashPlugin(Star):
         """切换节点"""
         if not self._manager or not self._manager.is_running():
             return error_response("Clash 未运行", status_code=503)
-        payload = await request.get_json()
+        payload = await request.json()
+        if not payload:
+            return error_response("缺少 payload", status_code=400)
         group = payload.get("group")
         node = payload.get("node")
         if not group or not node:
@@ -244,22 +246,26 @@ class ClashPlugin(Star):
         try:
             await self._manager.switch_proxy(group, node)
             return json_response({"success": True})
+        except HTTPStatusError as e:
+            error_detail = f"HTTP {e.response.status_code}: {e.response.text}"
+            logger.error(f"切换节点失败: {error_detail}", exc_info=True)
+            return error_response(f"切换失败：{error_detail}", status_code=500)
         except Exception as e:
             logger.error(f"切换节点失败: {e}", exc_info=True)
-            return error_response(str(e), status_code=500)
+            return error_response(f"切换失败：{e}", status_code=500)
 
     async def delay_api(self):
         """测试延迟"""
         if not self._manager or not self._manager.is_running():
             return error_response("Clash 未运行", status_code=503)
-        group = request.args.get("group")
-        node = request.args.get("node")
-        timeout = request.args.get("timeout", default=5000, type=int)
-        url = request.args.get("url", default="http://www.gstatic.com/generate_204")  # 新增
-        if not group:
-            return error_response("缺少 group 参数", status_code=400)
+        group = request.query.get("group")
+        node = request.query.get("node")
+        timeout = request.query.get("timeout", default=5000, type=int)
+        url = request.query.get("url", default="http://www.gstatic.com/generate_204")
+        if not group or not node:
+            return error_response("缺少 group 或 node", status_code=400)
         try:
-            result = await self._manager.test_delay(group, node, timeout, url)  # 传递 url
+            result = await self._manager.test_delay(group, node, timeout, url)
             return json_response(result)
         except Exception as e:
             return error_response(str(e), status_code=500)
@@ -268,7 +274,9 @@ class ClashPlugin(Star):
         """设置 Clash 运行模式"""
         if not self._manager or not self._manager.is_running():
             return error_response("Clash 未运行", status_code=503)
-        payload = await request.get_json()
+        payload = await request.json()
+        if not payload:
+            return error_response("缺少 payload", status_code=400)
         mode = payload.get("mode")
         if mode not in ("rule", "global", "direct"):
             return error_response("mode 必须是 rule/global/direct", status_code=400)
